@@ -4,7 +4,6 @@ import com.epam.aidial.core.data.FileMetadata;
 import com.epam.aidial.core.service.ResourceService;
 import com.epam.aidial.core.util.EtagBuilder;
 import com.epam.aidial.core.util.EtagHeader;
-import com.epam.aidial.core.util.ResourceUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufInputStream;
 import io.vertx.core.AsyncResult;
@@ -42,6 +41,7 @@ public class BlobWriteStream implements WriteStream<Buffer> {
     private final ResourceDescription resource;
     private final EtagHeader etag;
     private final String contentType;
+    private final String customMetadata;
 
     private final Buffer chunkBuffer = Buffer.buffer();
     private int chunkSize = MIN_PART_SIZE_BYTES;
@@ -67,13 +67,15 @@ public class BlobWriteStream implements WriteStream<Buffer> {
                            BlobStorage storage,
                            ResourceDescription resource,
                            EtagHeader etag,
-                           String contentType) {
+                           String contentType,
+                           String customMetadata) {
         this.vertx = vertx;
         this.resourceService = resourceService;
         this.storage = storage;
         this.resource = resource;
         this.etag = etag;
         this.contentType = contentType != null ? contentType : BlobStorageUtil.getContentType(resource.getName());
+        this.customMetadata = customMetadata;
     }
 
     @Override
@@ -121,7 +123,8 @@ public class BlobWriteStream implements WriteStream<Buffer> {
                 if (mpu == null) {
                     log.info("Resource is too small for multipart upload, sending as a regular blob");
                     try (InputStream chunkStream = new ByteBufInputStream(lastChunk)) {
-                        metadata = resourceService.putFile(resource, chunkStream.readAllBytes(), etag, contentType);
+                        // store the file in the cache and initially write result.toStub() (empty) to the blob store
+                        metadata = resourceService.putFile(resource, chunkStream.readAllBytes(), etag, contentType, customMetadata);
                     }
                 } else {
                     if (position != 0) {
@@ -134,7 +137,8 @@ public class BlobWriteStream implements WriteStream<Buffer> {
                     String newEtag = etagBuilder.append(lastChunk.nioBuffer()).build();
                     ResourceService.MultipartData multipartData = new ResourceService.MultipartData(
                             mpu, parts, contentType, bytesHandled, newEtag);
-                    metadata = resourceService.finishFileUpload(resource, multipartData, etag);
+                    // doesn't seem like we store the file in the cache in this case.
+                    metadata = resourceService.finishFileUpload(resource, multipartData, etag, customMetadata);
                     log.info("Multipart upload committed, bytes handled {}", bytesHandled);
                 }
 

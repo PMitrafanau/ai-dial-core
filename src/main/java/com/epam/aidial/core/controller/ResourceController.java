@@ -27,6 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @SuppressWarnings("checkstyle:Indentation")
@@ -162,6 +163,9 @@ public class ResourceController extends AccessControlBaseController {
             return context.respond(HttpStatus.REQUEST_ENTITY_TOO_LARGE, message);
         }
 
+        Map<String, String> customMetadataByResource = context.getConfig().getCustomMetadata();
+        String customMetadata = customMetadataByResource.get(descriptor.getType().getGroup());
+
         context.getRequest().body().compose(bytes -> {
                     if (bytes.length() > contentLimit) {
                         String message = "Resource size: %s exceeds max limit: %s".formatted(bytes.length(), contentLimit);
@@ -172,7 +176,7 @@ public class ResourceController extends AccessControlBaseController {
                     ResourceType resourceType = descriptor.getType();
                     String body = validateRequestBody(descriptor, resourceType, bytes.toString(StandardCharsets.UTF_8), etag.isOverwrite());
 
-                    return vertx.executeBlocking(() -> service.putResource(descriptor, body, etag), false);
+                    return vertx.executeBlocking(() -> service.putResource(descriptor, body, etag, customMetadata), false);
                 })
                 .onSuccess((metadata) -> {
                     if (metadata == null) {

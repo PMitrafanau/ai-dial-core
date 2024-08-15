@@ -1,5 +1,25 @@
 package com.epam.aidial.core.service;
 
+import javax.annotation.Nullable;
+import java.io.ByteArrayInputStream;
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static com.epam.aidial.core.util.ResourceUtil.CREATED_AT_ATTRIBUTE;
+import static com.epam.aidial.core.util.ResourceUtil.CUSTOM_METADATA_ATTRIBUTE;
+import static com.epam.aidial.core.util.ResourceUtil.UPDATED_AT_ATTRIBUTE;
+
 import com.epam.aidial.core.data.FileMetadata;
 import com.epam.aidial.core.data.MetadataBase;
 import com.epam.aidial.core.data.ResourceEvent;
@@ -41,26 +61,6 @@ import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.codec.CompositeCodec;
 
-import java.io.ByteArrayInputStream;
-import java.io.Closeable;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import javax.annotation.Nullable;
-
-import static com.epam.aidial.core.util.ResourceUtil.CREATED_AT_ATTRIBUTE;
-import static com.epam.aidial.core.util.ResourceUtil.ETAG_ATTRIBUTE;
-import static com.epam.aidial.core.util.ResourceUtil.UPDATED_AT_ATTRIBUTE;
-
 @Slf4j
 public class ResourceService implements AutoCloseable {
     private static final String BODY_ATTRIBUTE = "body";
@@ -72,6 +72,7 @@ public class ResourceService implements AutoCloseable {
             ResourceUtil.ETAG_ATTRIBUTE,
             ResourceUtil.CREATED_AT_ATTRIBUTE,
             ResourceUtil.UPDATED_AT_ATTRIBUTE,
+            CUSTOM_METADATA_ATTRIBUTE,
             CONTENT_TYPE_ATTRIBUTE,
             CONTENT_LENGTH_ATTRIBUTE,
             SYNCED_ATTRIBUTE,
@@ -347,26 +348,35 @@ public class ResourceService implements AutoCloseable {
 
     public ResourceItemMetadata putResource(
             ResourceDescription descriptor, String body, EtagHeader etag) {
-        return putResource(descriptor, body, etag, true);
+        return putResource(descriptor, body, etag, null, true);
     }
 
     public ResourceItemMetadata putResource(
-            ResourceDescription descriptor, String body, EtagHeader etag, boolean lock) {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        return putResource(descriptor, bytes, etag, "application/json", lock);
+            ResourceDescription descriptor, String body, EtagHeader etag, String customMetadata) {
+        return putResource(descriptor, body, etag, customMetadata, true);
     }
 
+    public ResourceItemMetadata putResource(
+            ResourceDescription descriptor, String body, EtagHeader etag, String customMetadata, boolean lock) {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        return putResource(descriptor, bytes, etag, "application/json", customMetadata, lock);
+    }
+
+    // TODO how is it possible, that the metadata is already in the cache
+    // If the resource doesn't exceed max size, then store it in the redis while writing an empty stub to the blobstore
     private ResourceItemMetadata putResource(
             ResourceDescription descriptor,
             byte[] body,
             EtagHeader etag,
             String contentType,
+            String customMetadata,
             boolean lock) {
         String redisKey = redisKey(descriptor);
 
         try (var ignore = lock ? lockService.lock(redisKey) : null) {
             ResourceItemMetadata metadata = getResourceMetadata(descriptor);
 
+            // If file already exists (in redis or in store)
             if (metadata != null) {
                 etag.validate(metadata.getEtag());
             }
@@ -374,7 +384,9 @@ public class ResourceService implements AutoCloseable {
             Long updatedAt = time();
             Long createdAt = metadata == null ? updatedAt : metadata.getCreatedAt();
             String newEtag = EtagBuilder.generateEtag(body);
-            Result result = new Result(body, newEtag, createdAt, updatedAt, contentType, (long) body.length, false);
+            String newCustomMetadata = metadata == null ? customMetadata : metadata.getCustomMetadata();
+            Result result = new Result(body, newEtag, createdAt, updatedAt, contentType, (long) body.length, newCustomMetadata,false);
+            // TODO if we exceed maxSize why is the resource still written?
             if (body.length <= maxSize) {
                 redisPut(redisKey, result);
                 if (metadata == null) {
@@ -397,20 +409,21 @@ public class ResourceService implements AutoCloseable {
         }
     }
 
-    public FileMetadata putFile(ResourceDescription descriptor, byte[] body, EtagHeader etag, String contentType) {
+    public FileMetadata putFile(ResourceDescription descriptor, byte[] body, EtagHeader etag, String contentType, String customMetadata) {
         if (descriptor.getType() != ResourceType.FILE) {
             throw new IllegalArgumentException("Expected a file, got %s".formatted(descriptor.getType()));
         }
 
-        return (FileMetadata) putResource(descriptor, body, etag, contentType, true);
+        return (FileMetadata) putResource(descriptor, body, etag, contentType, customMetadata, true);
     }
 
-    public BlobWriteStream beginFileUpload(ResourceDescription descriptor, EtagHeader etag, String contentType) {
-        return new BlobWriteStream(vertx, this, blobStore, descriptor, etag, contentType);
+    public BlobWriteStream beginFileUpload(ResourceDescription descriptor, EtagHeader etag, String contentType, String customMetadata) {
+        return new BlobWriteStream(vertx, this, blobStore, descriptor, etag, contentType, customMetadata);
     }
 
+    // TODO: when is it called for already existing files? (allows overwrite? file is treated as updated, not created, even if we reuploaded?)
     public FileMetadata finishFileUpload(
-            ResourceDescription descriptor, MultipartData multipartData, EtagHeader etag) {
+            ResourceDescription descriptor, MultipartData multipartData, EtagHeader etag, String customMetadata) {
         String redisKey = redisKey(descriptor);
         try (var ignore = lockService.lock(redisKey)) {
             ResourceItemMetadata metadata = getResourceMetadata(descriptor);
@@ -421,14 +434,16 @@ public class ResourceService implements AutoCloseable {
             flushToBlobStore(redisKey);
             Long updatedAt = time();
             Long createdAt = metadata == null ? updatedAt : metadata.getCreatedAt();
+            String newCustomMetadata = metadata == null ? customMetadata : metadata.getCustomMetadata();
             MultipartUpload multipartUpload = multipartData.multipartUpload;
             Map<String, String> userMetadata = multipartUpload.blobMetadata().getUserMetadata();
-            userMetadata.putAll(toUserMetadata(multipartData.etag, createdAt, updatedAt));
+            userMetadata.putAll(toUserMetadata(multipartData.etag, createdAt, updatedAt, newCustomMetadata));
             blobStore.completeMultipartUpload(multipartUpload, multipartData.parts);
 
             ResourceEvent.Action action = metadata == null
                     ? ResourceEvent.Action.CREATE
                     : ResourceEvent.Action.UPDATE;
+            // TODO: should I send customMetadata here?
             publishEvent(descriptor, action, updatedAt, multipartData.etag);
 
             return (FileMetadata) new FileMetadata(
@@ -439,6 +454,8 @@ public class ResourceService implements AutoCloseable {
         }
     }
 
+    // TODO: should we update tags for existing resource?
+    // Is called when the resource has to be updated?
     public void computeResource(ResourceDescription descriptor, Function<String, String> fn) {
         String redisKey = redisKey(descriptor);
 
@@ -448,7 +465,7 @@ public class ResourceService implements AutoCloseable {
             if (newBody != null) {
                 // update resource only if body changed
                 if (!newBody.equals(oldBody)) {
-                    putResource(descriptor, newBody, EtagHeader.ANY, false);
+                    putResource(descriptor, newBody, EtagHeader.ANY, null, false);
                 }
             }
         }
@@ -610,6 +627,7 @@ public class ResourceService implements AutoCloseable {
         Long updatedAt = meta.getUserMetadata().containsKey(UPDATED_AT_ATTRIBUTE)
                 ? Long.parseLong(meta.getUserMetadata().get(UPDATED_AT_ATTRIBUTE))
                 : null;
+        String customMetadata = meta.getUserMetadata().get(CUSTOM_METADATA_ATTRIBUTE);
 
         // Get times from blob metadata if available for files that didn't store it in user metadata
         if (createdAt == null && meta.getCreationDate() != null) {
@@ -632,7 +650,7 @@ public class ResourceService implements AutoCloseable {
             }
         }
 
-        return new Result(body, etag, createdAt, updatedAt, contentType, contentLength, true);
+        return new Result(body, etag, createdAt, updatedAt, contentType, contentLength, customMetadata, true);
     }
 
     private void blobPut(String key, Result result, boolean compress) {
@@ -643,7 +661,7 @@ public class ResourceService implements AutoCloseable {
             bytes = Compression.compress(encoding, bytes);
         }
 
-        Map<String, String> metadata = toUserMetadata(result.etag, result.createdAt, result.updatedAt);
+        Map<String, String> metadata = toUserMetadata(result.etag, result.createdAt, result.updatedAt, result.customMetadata);
         blobStore.store(key, result.contentType, encoding, metadata, bytes);
     }
 
@@ -683,8 +701,9 @@ public class ResourceService implements AutoCloseable {
         Long contentLength = RedisUtil.redisToLong(fields.get(CONTENT_LENGTH_ATTRIBUTE));
         Long createdAt = RedisUtil.redisToLong(fields.get(ResourceUtil.CREATED_AT_ATTRIBUTE));
         Long updatedAt = RedisUtil.redisToLong(fields.get(ResourceUtil.UPDATED_AT_ATTRIBUTE));
+        String customMetadata = RedisUtil.redisToString(fields.get(CUSTOM_METADATA_ATTRIBUTE), null);
 
-        return new Result(body, etag, createdAt, updatedAt, contentType, contentLength, synced);
+        return new Result(body, etag, createdAt, updatedAt, contentType, contentLength, customMetadata, synced);
     }
 
     private void redisPut(String key, Result result) {
@@ -703,6 +722,7 @@ public class ResourceService implements AutoCloseable {
             fields.put(ResourceUtil.ETAG_ATTRIBUTE, RedisUtil.stringToRedis(result.etag));
             fields.put(ResourceUtil.CREATED_AT_ATTRIBUTE, RedisUtil.longToRedis(result.createdAt));
             fields.put(ResourceUtil.UPDATED_AT_ATTRIBUTE, RedisUtil.longToRedis(result.updatedAt));
+            fields.put(CUSTOM_METADATA_ATTRIBUTE, RedisUtil.stringToRedis(result.customMetadata));
             fields.put(CONTENT_TYPE_ATTRIBUTE, RedisUtil.stringToRedis(result.contentType));
             fields.put(CONTENT_LENGTH_ATTRIBUTE, RedisUtil.longToRedis(result.contentLength));
             fields.put(EXISTS_ATTRIBUTE, RedisUtil.BOOLEAN_TRUE_ARRAY);
@@ -753,7 +773,7 @@ public class ResourceService implements AutoCloseable {
         return metadata.getEtag();
     }
 
-    private static Map<String, String> toUserMetadata(String etag, Long createdAt, Long updatedAt) {
+    private static Map<String, String> toUserMetadata(String etag, Long createdAt, Long updatedAt, String customMetadata) {
         Map<String, String> metadata = new HashMap<>();
         metadata.put(ResourceUtil.ETAG_ATTRIBUTE, etag);
         if (createdAt != null) {
@@ -761,6 +781,9 @@ public class ResourceService implements AutoCloseable {
         }
         if (updatedAt != null) {
             metadata.put(ResourceUtil.UPDATED_AT_ATTRIBUTE, Long.toString(updatedAt));
+        }
+        if (customMetadata != null) {
+            metadata.put(ResourceUtil.CUSTOM_METADATA_ATTRIBUTE, customMetadata);
         }
 
         return metadata;
@@ -774,19 +797,21 @@ public class ResourceService implements AutoCloseable {
             Long updatedAt,
             String contentType,
             Long contentLength,
+            String customMetadata,
             boolean synced) {
-        public static final Result DELETED_SYNCED = new Result(null, null, null, null, null, null, true);
-        public static final Result DELETED_NOT_SYNCED = new Result(null, null, null, null, null, null, false);
+        public static final Result DELETED_SYNCED = new Result(null, null, null, null, null, null, null, true);
+        public static final Result DELETED_NOT_SYNCED = new Result(null, null, null, null, null, null, null,false);
 
         public boolean exists() {
             return body != null;
         }
 
         public Result toStub() {
-            return new Result(ArrayUtils.EMPTY_BYTE_ARRAY, etag, createdAt, updatedAt, contentType, 0L, synced);
+            return new Result(ArrayUtils.EMPTY_BYTE_ARRAY, etag, createdAt, updatedAt, contentType, 0L, customMetadata, synced);
         }
     }
 
+    // TODO what is it used for?
     public record ResourceStream(InputStream inputStream, String etag, String contentType, long contentLength)
             implements Closeable {
 

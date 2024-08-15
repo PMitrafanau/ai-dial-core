@@ -18,6 +18,7 @@ public class ResourceUtil {
     public static final String ETAG_ATTRIBUTE = "etag";
     public static final String CREATED_AT_ATTRIBUTE = "created_at";
     public static final String UPDATED_AT_ATTRIBUTE = "updated_at";
+    public static final String CUSTOM_METADATA_ATTRIBUTE = "custom_metadata";
     // Default ETag for old records
     public static final String DEFAULT_ETAG = "0";
 

@@ -1,8 +1,11 @@
 package com.epam.aidial.core.controller;
 
+import java.util.Map;
+
 import com.epam.aidial.core.Proxy;
 import com.epam.aidial.core.ProxyContext;
 import com.epam.aidial.core.data.FileMetadata;
+import com.epam.aidial.core.data.ResourceType;
 import com.epam.aidial.core.service.ResourceService;
 import com.epam.aidial.core.storage.BlobWriteStream;
 import com.epam.aidial.core.storage.ResourceDescription;
@@ -35,6 +38,9 @@ public class UploadFileController extends AccessControlBaseController {
         }
 
         return proxy.getVertx().executeBlocking(() -> {
+            Map<String, String> customMetadataByResource = context.getConfig().getCustomMetadata();
+            String customMetadata = customMetadataByResource.get(resource.getType().getGroup());
+
             EtagHeader etag = EtagHeader.fromRequest(context.getRequest());
             etag.validate(() -> proxy.getResourceService().getEtag(resource));
             context.getRequest()
@@ -42,9 +48,10 @@ public class UploadFileController extends AccessControlBaseController {
                     .uploadHandler(upload -> {
                         String contentType = upload.contentType();
                         Pipe<Buffer> pipe = new PipeImpl<>(upload).endOnFailure(false);
-                        BlobWriteStream writeStream = resourceService.beginFileUpload(resource, etag, contentType);
+                        BlobWriteStream writeStream = resourceService.beginFileUpload(resource, etag, contentType, customMetadata);
                         pipe.to(writeStream)
                                 .onSuccess(success -> {
+                                    // TODO Do I need to keep customMetadata in FileMetadata?
                                     FileMetadata metadata = writeStream.getMetadata();
                                     context.putHeader(HttpHeaders.ETAG, metadata.getEtag())
                                             .exposeHeaders()

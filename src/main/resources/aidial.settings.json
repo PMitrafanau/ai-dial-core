@@ -38,23 +38,26 @@
     "compressionSupported": true
   },
   "config": {
-    "files": [],
-    "reload": 60000
+    "files": ["./aidial.config.json"],
+    "reload": 20000
   },
   "identityProviders": {
+    "test": {
+      "disableJwtVerification": true,
+      "rolePath": "role"
+    }
   },
   "storage": {
-    "provider" : "filesystem",
-    "bucket": "dial",
-    "createBucket": true,
-    "overrides": {
-      "jclouds.filesystem.basedir": "data"
-    }
+    "provider" : "aws-s3",
+    "identity": "...",
+    "credential": "...",
+    "bucket": "...",
+    "createBucket": true
   },
   "resources": {
     "maxSize" : 1048576,
-    "syncPeriod": 60000,
-    "syncDelay": 120000,
+    "syncPeriod": 20000,
+    "syncDelay": 20000,
     "syncBatch": 4096,
     "cacheExpiration": 300000,
     "compressionMinSize": 256,
@@ -72,6 +75,15 @@
           "targets": ["admin"]
         }
       ]
+    }
+  },
+  "encryption": {
+    "salt": "salt",
+    "password": "pass"
+  },
+  "redis": {
+    "singleServerConfig": {
+      "address": "redis://localhost:6379"
     }
   }
 }

@@ -1,5 +1,6 @@
 package com.epam.aidial.core.config;
 
+import com.epam.aidial.core.data.ResourceType;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
@@ -23,6 +24,8 @@ public class Config {
     private Map<String, Role> roles = new HashMap<>();
     private Set<Integer> retriableErrorCodes = Set.of();
     private Map<String, Interceptor> interceptors = Map.of();
+    // TODO limit the keys to files/prompts/conversations
+    private Map<String, String> customMetadata = Map.of();
 
 
     public Deployment selectDeployment(String deploymentId) {
