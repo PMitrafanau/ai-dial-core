@@ -3,7 +3,9 @@
     "workerPoolSize": 32,
     "metricsOptions": {
       "enabled": true,
-      "disabledMetricsCategories": ["http.server"],
+      "disabledMetricsCategories": [
+        "http.server"
+      ],
       "jvmMetricsEnabled": true,
       "labels": [
         "HTTP_METHOD",
@@ -31,30 +33,36 @@
     "maxPoolSize": 128
   },
   "server": {
-    "port": 8080,
+    "port": 8081,
     "acceptBacklog": 4096,
     "idleTimeoutUnit": "MILLISECONDS",
     "idleTimeout": 300000,
     "compressionSupported": true
   },
   "config": {
-    "files": [],
-    "reload": 60000
+    "files": [
+      "./aidial.config.json"
+    ],
+    "reload": 20000
   },
   "identityProviders": {
-  },
-  "storage": {
-    "provider" : "filesystem",
-    "bucket": "dial",
-    "createBucket": true,
-    "overrides": {
-      "jclouds.filesystem.basedir": "data"
+    "keycloak": {
+      "jwksUrl": "http://host.docker.internal:8080/realms/dial/protocol/openid-connect/certs",
+      "rolePath": "resource_access.dial-chat.roles",
+      "issuerPattern": "^http:\\/\\/host.docker.internal:8080.+$"
     }
   },
+  "storage": {
+    "provider": "aws-s3",
+    "identity": "...",
+    "credential": "...",
+    "bucket": "mitrafanau-ai-dial-core",
+    "createBucket": true
+  },
   "resources": {
-    "maxSize" : 1048576,
-    "syncPeriod": 60000,
-    "syncDelay": 120000,
+    "maxSize": 1048576,
+    "syncPeriod": 20000,
+    "syncDelay": 20000,
     "syncBatch": 4096,
     "cacheExpiration": 300000,
     "compressionMinSize": 256,
@@ -69,9 +77,20 @@
         {
           "function": "CONTAIN",
           "source": "roles",
-          "targets": ["admin"]
+          "targets": [
+            "admin"
+          ]
         }
       ]
+    }
+  },
+  "encryption": {
+    "salt": "salt",
+    "password": "pass"
+  },
+  "redis": {
+    "singleServerConfig": {
+      "address": "redis://localhost:6379"
     }
   }
 }

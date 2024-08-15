@@ -1,5 +1,10 @@
 package com.epam.aidial.core.util;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 import com.epam.aidial.core.data.ResourceAccessType;
 import com.epam.aidial.core.data.ResourceType;
 import com.epam.aidial.core.data.SharedResource;
@@ -8,16 +13,12 @@ import com.epam.aidial.core.storage.BlobStorageUtil;
 import com.epam.aidial.core.storage.ResourceDescription;
 import lombok.experimental.UtilityClass;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
-
 @UtilityClass
 public class ResourceUtil {
     public static final String ETAG_ATTRIBUTE = "etag";
     public static final String CREATED_AT_ATTRIBUTE = "created_at";
     public static final String UPDATED_AT_ATTRIBUTE = "updated_at";
+    public static final String AIDIAL_RESOURCE_TYPE_GROUP = "aidial_resource_type_group";
     // Default ETag for old records
     public static final String DEFAULT_ETAG = "0";
 
